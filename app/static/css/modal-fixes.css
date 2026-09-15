@@ -1,0 +1,34 @@
+.modal label {
+  display: block;
+}
+
+.modal input:not([type="checkbox"]),
+.modal select {
+  display: block;
+  width: 100%;
+  min-height: 43px;
+  margin-top: 8px;
+}
+
+.modal .check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #dfe5e2;
+  border-radius: 9px;
+  background: #f7f9f8;
+  color: #33443d;
+  cursor: pointer;
+}
+
+.modal .check input[type="checkbox"] {
+  appearance: auto;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  flex: 0 0 18px;
+  accent-color: #0b785e;
+}
