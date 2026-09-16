@@ -1,6 +1,6 @@
 # POS local para impresora térmica de 58 mm
 
-Sistema de punto de venta para Windows con catálogo, carrito, cobro, historial, caja y tickets térmicos. La impresión conserva el flujo probado: navegador → FastAPI → `TicketBuilder` → `pywin32` → spooler de Windows → impresora USB.
+Sistema de punto de venta para Windows con frontend React + TypeScript, catálogo, carrito, cobro, historial, caja y tickets térmicos. La impresión conserva el flujo probado: navegador → FastAPI → `TicketBuilder` → `pywin32` → spooler de Windows → impresora USB.
 
 Una venta se confirma primero en una transacción SQLite. La impresión ocurre después: si falla, la venta permanece registrada y puede reimprimirse desde el historial.
 
@@ -28,6 +28,24 @@ python -m app.main
 ```
 
 Abra [http://localhost:8000](http://localhost:8000). El servidor escucha únicamente en `127.0.0.1` de forma predeterminada.
+
+## Desarrollo del frontend
+
+El frontend está en `frontend/` y utiliza React, TypeScript y Vite:
+
+```powershell
+cd frontend
+pnpm install
+pnpm dev
+```
+
+Vite abre `http://127.0.0.1:5173` y redirige `/api` al backend local. Para generar la versión de producción que sirve FastAPI:
+
+```powershell
+pnpm build
+```
+
+El resultado se guarda en `frontend/dist/`. FastAPI sirve ese build y ya no depende de las plantillas y scripts anteriores.
 
 En el primer arranque se crea `data/pos.db` y sus tablas. Para esta primera etapa el esquema se administra con `SQLAlchemy.metadata.create_all()`. Antes de distribuir actualizaciones que alteren tablas existentes debe incorporarse Alembic; `create_all` no reemplaza migraciones de producción.
 

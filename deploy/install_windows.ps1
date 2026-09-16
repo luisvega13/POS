@@ -6,6 +6,17 @@ $Python = Join-Path $VenvDir "Scripts\python.exe"
 Set-Location -LiteralPath $ProjectDir
 if (-not (Test-Path -LiteralPath $Python)) { py -3 -m venv $VenvDir }
 & $Python -m pip install -r (Join-Path $ProjectDir "requirements.txt")
+$FrontendDir = Join-Path $ProjectDir "frontend"
+$FrontendDist = Join-Path $FrontendDir "dist\index.html"
+$Pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
+if ($Pnpm) {
+    Push-Location $FrontendDir
+    & $Pnpm.Source install --frozen-lockfile
+    & $Pnpm.Source build
+    Pop-Location
+} elseif (-not (Test-Path -LiteralPath $FrontendDist)) {
+    throw "El frontend no está compilado. Instale Node.js y pnpm y ejecute pnpm build en frontend."
+}
 & $Python -c "from app.database import init_db; init_db(); print('Base de datos preparada')"
 if ($RegisterStartup) {
     $Runner = Join-Path $ProjectDir "deploy\run_pos.ps1"

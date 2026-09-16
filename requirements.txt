@@ -1,5 +1,4 @@
 fastapi
 uvicorn
 pywin32
-jinja2
 sqlalchemy

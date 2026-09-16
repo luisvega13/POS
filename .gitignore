@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+frontend/node_modules/
 logs/*.log
 data/*.db
 backups/*.db

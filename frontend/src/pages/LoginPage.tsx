@@ -1,0 +1,10 @@
+import {LockKeyhole,Store} from 'lucide-react';
+import {FormEvent,useState} from 'react';
+import {api} from '../api';
+import type {User} from '../types';
+
+export function LoginPage({setup,onAuthenticated}:{setup:boolean;onAuthenticated:(user:User)=>void}){
+ const [displayName,setDisplayName]=useState(''),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[error,setError]=useState(''),[saving,setSaving]=useState(false);
+ async function submit(event:FormEvent){event.preventDefault();setSaving(true);setError('');try{const result=setup?await api.setup({display_name:displayName,username,password}):await api.login({username,password});onAuthenticated(result.user)}catch(e){setError((e as Error).message)}finally{setSaving(false)}}
+ return <main className="auth-screen"><section className="auth-card"><div className="auth-mark"><Store size={23}/></div><small>{setup?'CONFIGURACIÓN INICIAL':'ACCESO AL SISTEMA'}</small><h1>{setup?'Crea tu administrador':'Bienvenido de nuevo'}</h1><p>{setup?'Esta cuenta tendrá control total para crear los perfiles del equipo.':'Ingresa con la cuenta asignada para comenzar tu turno.'}</p><form onSubmit={submit}>{setup&&<label className="field">Nombre completo<input autoFocus required minLength={2} value={displayName} onChange={e=>setDisplayName(e.target.value)} placeholder="Nombre del administrador"/></label>}<label className="field">Usuario<input autoFocus={!setup} required minLength={3} autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Tu usuario"/></label><label className="field">Contraseña<input required minLength={8} type="password" autoComplete={setup?'new-password':'current-password'} value={password} onChange={e=>setPassword(e.target.value)} placeholder="Mínimo 8 caracteres"/></label>{error&&<div className="auth-error">{error}</div>}<button className="primary full" disabled={saving}><LockKeyhole size={16}/>{saving?'Procesando…':setup?'Crear administrador':'Iniciar sesión'}</button></form></section></main>;
+}
