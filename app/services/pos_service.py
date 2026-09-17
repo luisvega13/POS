@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal,InvalidOperation,ROUND_HALF_UP
 from sqlalchemy import func,select
 from sqlalchemy.orm import Session,selectinload
-from app.models import BusinessConfig,CashCharge,CashSession,Category,DiningTable,DiningTableItem,PermissionConfig,Product,Sale,SaleItem,TableItemCancellation,TableItemTransfer,User
+from app.models import BusinessConfig,CashCharge,CashSession,Category,DiningTable,DiningTableItem,PermissionConfig,Product,Sale,SaleItem,SalePayment,TableItemCancellation,TableItemTransfer,User
 
 CENT=Decimal("0.01")
 PAYMENTS={"cash","card","transfer"}
@@ -15,7 +15,9 @@ def money(value):
 def product_dict(p): return {"id":p.id,"name":p.name,"price":str(p.price),"category":p.category,"active":p.active,"created_at":p.created_at.isoformat(),"updated_at":p.updated_at.isoformat()}
 def sale_dict(s,details=False):
     tip=money(s.tip_amount or 0); data={"id":s.id,"folio":s.folio,"subtotal":str(s.subtotal),"total":str(s.total),"discount_amount":str(s.discount_amount or 0),"discount_reason":s.discount_reason or "","tip_amount":str(tip),"tip_method":s.tip_method,"service_charge_percent":s.service_charge_percent or 0,"grand_total":str(money(s.total+tip)),"guest_count":s.guest_count or 0,"payment_method":s.payment_method,"amount_received":str(s.amount_received) if s.amount_received is not None else None,"change_amount":str(s.change_amount) if s.change_amount is not None else None,"created_at":s.created_at.isoformat(),"cash_session_id":s.cash_session_id}
-    if details: data["items"]=[{"id":i.id,"product_id":i.product_id,"product_name":i.product_name,"unit_price":str(i.unit_price),"quantity":i.quantity,"subtotal":str(i.subtotal)} for i in s.items]
+    if details:
+        data["items"]=[{"id":i.id,"product_id":i.product_id,"product_name":i.product_name,"unit_price":str(i.unit_price),"quantity":i.quantity,"subtotal":str(i.subtotal)} for i in s.items]
+        data["payments"]=[{"method":p.method,"amount":str(p.amount)} for p in s.payments]
     return data
 
 def category_dict(c): return {"id":c.id,"name":c.name,"active":c.active,"created_at":c.created_at.isoformat(),"updated_at":c.updated_at.isoformat()}
@@ -100,9 +102,14 @@ class CashService:
     def summary(cls,db,session=None):
         session=session or cls.current(db)
         if not session: raise PosError("No hay una caja abierta")
-        rows=db.execute(select(Sale.payment_method,func.coalesce(func.sum(Sale.total),0),func.count(Sale.id)).where(Sale.cash_session_id==session.id).group_by(Sale.payment_method)).all()
+        payment_sale_ids=select(SalePayment.sale_id)
+        rows=db.execute(select(Sale.payment_method,func.coalesce(func.sum(Sale.total),0),func.count(Sale.id)).where(Sale.cash_session_id==session.id,Sale.id.not_in(payment_sale_ids)).group_by(Sale.payment_method)).all()
         totals={"cash":Decimal("0"),"card":Decimal("0"),"transfer":Decimal("0")}; operations=0
         for method,total,count in rows: totals[method]=money(total); operations+=count
+        payment_rows=db.execute(select(SalePayment.method,func.coalesce(func.sum(SalePayment.amount),0)).join(Sale,Sale.id==SalePayment.sale_id).where(Sale.cash_session_id==session.id).group_by(SalePayment.method)).all()
+        for method,total in payment_rows:
+            if method in totals:totals[method]=money(totals[method]+total)
+        operations=int(db.scalar(select(func.count(Sale.id)).where(Sale.cash_session_id==session.id)) or 0)
         tip_rows=db.execute(select(Sale.tip_method,func.coalesce(func.sum(Sale.tip_amount),0)).where(Sale.cash_session_id==session.id,Sale.tip_amount>0).group_by(Sale.tip_method)).all()
         tips={"cash":Decimal("0"),"card":Decimal("0"),"transfer":Decimal("0")}
         for method,total in tip_rows:
@@ -171,14 +178,25 @@ class SaleService:
         if discount>subtotal:raise PosError("El descuento no puede superar el consumo")
         total=money(subtotal-discount);discount_reason=(getattr(payload,"discount_reason","") or "").strip()
         if discount>0 and not discount_reason:raise PosError("Indica el motivo del descuento")
-        method=payload.payment_method.lower()
-        if method not in PAYMENTS: raise PosError("Método de pago no válido")
+        raw_payments=getattr(payload,"payments",[]) or []
+        payments=[]
+        if raw_payments:
+            for row in raw_payments:
+                method_value=row.method.lower()
+                if method_value not in PAYMENTS:raise PosError("Método de pago no válido")
+                payments.append((method_value,money(row.amount)))
+            if money(sum((amount for _,amount in payments),Decimal("0")))!=total:raise PosError("La suma de los pagos debe coincidir con el total de la venta")
+            method=payments[0][0] if len(payments)==1 else "mixed"
+        else:
+            method=payload.payment_method.lower()
+            if method not in PAYMENTS: raise PosError("Método de pago no válido")
+            payments=[(method,total)]
         permissions=db.get(PermissionConfig,1)
         tip=money(total*Decimal(permissions.service_charge_percent)/Decimal(100)) if permissions and permissions.include_tip_in_ticket else money(getattr(payload,"tip_amount",0) or 0)
         tip_method=(getattr(payload,"tip_method",None) or method).lower() if tip>0 else None
         if tip_method and tip_method not in PAYMENTS: raise PosError("Método de propina no válido")
         received=money(payload.amount_received) if payload.amount_received is not None else None
-        cash_due=(total if method=="cash" else Decimal("0"))+(tip if tip_method=="cash" else Decimal("0"))
+        cash_due=sum((amount for payment_method,amount in payments if payment_method=="cash"),Decimal("0"))+(tip if tip_method=="cash" else Decimal("0"))
         if cash_due>0:
             if received is None or received < cash_due: raise PosError("El efectivo recibido es menor al total en efectivo")
             change=money(received-cash_due)
@@ -187,6 +205,7 @@ class SaleService:
             last=db.scalar(select(Sale.folio).order_by(Sale.id.desc()).limit(1)); folio=f"{int(last or '0')+1:06d}"
             sale=Sale(folio=folio,cash_session_id=cash.id,subtotal=subtotal,total=total,discount_amount=discount,discount_reason=discount_reason,payment_method=method,amount_received=received,change_amount=change,tip_amount=tip,tip_method=tip_method,service_charge_percent=permissions.service_charge_percent if permissions and permissions.include_tip_in_ticket else 0,guest_count=getattr(payload,"guest_count",0) or 0)
             db.add(sale); db.flush()
+            for payment_method,payment_amount in payments:db.add(SalePayment(sale_id=sale.id,method=payment_method,amount=payment_amount))
             for pid,qty in quantities.items():
                 p=products[pid]; subtotal=(money(p.price)*qty).quantize(CENT)
                 db.add(SaleItem(sale_id=sale.id,product_id=p.id,product_name=p.name,unit_price=money(p.price),quantity=qty,subtotal=subtotal))
@@ -196,7 +215,7 @@ class SaleService:
         return SaleService.get(db,sale.id)
     @staticmethod
     def get(db,sid):
-        sale=db.scalar(select(Sale).options(selectinload(Sale.items)).where(Sale.id==sid))
+        sale=db.scalar(select(Sale).options(selectinload(Sale.items),selectinload(Sale.payments)).where(Sale.id==sid))
         if not sale: raise PosError("Venta no encontrada")
         return sale
     @staticmethod
@@ -225,9 +244,19 @@ class SaleService:
 
 def dining_table_dict(table):
     items=[{"id":item.id,"product_id":item.product_id,"product_name":item.product_name,"unit_price":str(item.unit_price),"quantity":item.quantity,"subtotal":str(money(item.unit_price*item.quantity)),"added_at":item.added_at.isoformat()} for item in table.items]
-    return {"id":table.id,"name":table.name,"status":table.status,"guest_count":table.guest_count or 0,"assigned_waiter_id":table.assigned_waiter_id,"assigned_waiter_name":table.assigned_waiter_name or "","opened_at":table.opened_at.isoformat(),"updated_at":table.updated_at.isoformat(),"closed_at":table.closed_at.isoformat() if table.closed_at else None,"total":str(money(sum((Decimal(item["subtotal"]) for item in items),Decimal("0")))),"items":items}
+    return {"id":table.id,"name":table.name,"status":table.status,"guest_count":table.guest_count or 0,"assigned_waiter_id":table.assigned_waiter_id,"assigned_waiter_name":table.assigned_waiter_name or "","opened_at":table.opened_at.isoformat(),"updated_at":table.updated_at.isoformat(),"closed_at":table.closed_at.isoformat() if table.closed_at else None,"account_printed_at":table.account_printed_at.isoformat() if table.account_printed_at else None,"total":str(money(sum((Decimal(item["subtotal"]) for item in items),Decimal("0")))),"items":items}
 
 class DiningTableService:
+    @staticmethod
+    def ensure_editable(table):
+        if table.account_printed_at:raise PosError("La cuenta ya fue impresa. Reabre la mesa para modificarla")
+        return table
+    @staticmethod
+    def reopen_printed(db,table_id):
+        table=DiningTableService.get(db,table_id)
+        if not table.account_printed_at:raise PosError("La mesa no tiene una cuenta impresa")
+        table.account_printed_at=None;table.updated_at=datetime.now();db.commit()
+        return dining_table_dict(DiningTableService.get(db,table_id))
     @staticmethod
     def list(db,user=None):
         query=select(DiningTable).options(selectinload(DiningTable.items)).where(DiningTable.status=="open").order_by(DiningTable.opened_at)
@@ -252,14 +281,14 @@ class DiningTableService:
         return dining_table_dict(DiningTableService.get(db,table.id))
     @staticmethod
     def assign_waiter(db,table_id,waiter_id):
-        table=DiningTableService.get(db,table_id)
+        table=DiningTableService.ensure_editable(DiningTableService.get(db,table_id))
         waiter=db.get(User,waiter_id)
         if not waiter or not waiter.active or waiter.role!="waiter": raise PosError("Mesero activo no encontrado")
         table.assigned_waiter_id=waiter.id;table.assigned_waiter_name=waiter.display_name;table.updated_at=datetime.now();db.commit()
         return dining_table_dict(DiningTableService.get(db,table.id))
     @staticmethod
     def save_items(db,table_id,items):
-        table=DiningTableService.get(db,table_id); quantities={}
+        table=DiningTableService.ensure_editable(DiningTableService.get(db,table_id)); quantities={}
         for item in items:
             if item.quantity < 1: raise PosError("Las cantidades deben ser mayores que cero")
             quantities[item.product_id]=quantities.get(item.product_id,0)+item.quantity
@@ -272,7 +301,7 @@ class DiningTableService:
         return dining_table_dict(DiningTableService.get(db,table.id))
     @staticmethod
     def add_items(db,table_id,items):
-        table=DiningTableService.get(db,table_id); quantities={}
+        table=DiningTableService.ensure_editable(DiningTableService.get(db,table_id)); quantities={}
         for item in items:
             if item.quantity < 1: raise PosError("Las cantidades deben ser mayores que cero")
             quantities[item.product_id]=quantities.get(item.product_id,0)+item.quantity
@@ -286,7 +315,7 @@ class DiningTableService:
         return dining_table_dict(DiningTableService.get(db,table.id))
     @staticmethod
     def cancel_item(db,table_id,item_id,quantity,reason,user):
-        table=DiningTableService.get(db,table_id); item=next((row for row in table.items if row.id==item_id),None)
+        table=DiningTableService.ensure_editable(DiningTableService.get(db,table_id)); item=next((row for row in table.items if row.id==item_id),None)
         if not item: raise PosError("Producto de la mesa no encontrado")
         if quantity<1 or quantity>item.quantity: raise PosError("Cantidad a cancelar no válida")
         value=reason.strip()
@@ -303,7 +332,7 @@ class DiningTableService:
     @staticmethod
     def transfer_items(db,source_id,target_id,items,user):
         if source_id==target_id: raise PosError("La mesa destino debe ser diferente")
-        source=DiningTableService.get(db,source_id); target=DiningTableService.get(db,target_id); requested={item.item_id:item.quantity for item in items if item.quantity>0}
+        source=DiningTableService.ensure_editable(DiningTableService.get(db,source_id)); target=DiningTableService.ensure_editable(DiningTableService.get(db,target_id)); requested={item.item_id:item.quantity for item in items if item.quantity>0}
         if not requested: raise PosError("Selecciona productos para traspasar")
         source_items={item.id:item for item in source.items}
         for item_id,quantity in requested.items():

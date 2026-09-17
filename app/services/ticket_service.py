@@ -60,8 +60,12 @@ def sale_ticket(sale,config,permissions=None):
         b.text(columns(label,pesos(tip))).bold(True).text(columns("TOTAL PAGADO",pesos(sale.total+tip))).bold(False)
     b.text("")
     labels={"cash":"EFECTIVO","card":"TARJETA","transfer":"TRANSFERENCIA"}
-    b.text("Pago:").bold(True).text(labels.get(sale.payment_method,sale.payment_method.upper())).bold(False)
-    if sale.payment_method=="cash":
+    payments=getattr(sale,"payments",[]) or []
+    b.text("Pago:")
+    if len(payments)>1:
+        for payment in payments:b.text(columns(labels.get(payment.method,payment.method.upper()),pesos(payment.amount)))
+    else:b.bold(True).text(labels.get(sale.payment_method,sale.payment_method.upper())).bold(False)
+    if any(payment.method=="cash" for payment in payments) or sale.payment_method=="cash":
         b.text("").text(columns("Recibido:",pesos(sale.amount_received))).text(columns("Cambio:",pesos(sale.change_amount)))
     b.text("").align_center().text(config.ticket_message or "¡Gracias por su compra!").feed(4)
     return b.build()
@@ -83,7 +87,11 @@ def table_account_ticket(table,config,permissions=None):
     return b.build()
 def cash_ticket(summary,config):
     closed=summary.get("closed_at");closed_text=closed[0:16].replace("T"," ") if closed else "Pendiente"
-    b=base_builder(config).align_center().bold(True).text(config.business_name or "MI NEGOCIO").text("CORTE DE CAJA").bold(False).text("").align_left().text(f"Apertura: {summary['opened_at'][0:16].replace('T',' ')}").text(f"Cierre: {closed_text}").text("")
+    b=base_builder(config).align_center().bold(True).text(config.business_name or "MI NEGOCIO").text("CORTE DE CAJA").bold(False).text("").align_left().text(f"Apertura: {summary['opened_at'][0:16].replace('T',' ')}").text(f"Cierre: {closed_text}")
+    if summary.get("reopened_count",0):
+        reopened=str(summary.get("last_reopened_at") or "")[0:16].replace("T"," ")
+        b.text(f"Ultima reapertura: {reopened}").text(f"Reaperturas: {summary['reopened_count']}")
+    b.text("")
     b.text(columns("Fondo inicial",pesos(summary["opening_amount"]))).text(columns("Operaciones",summary["operations"])).line(WIDTH)
     b.bold(True).text("VENTAS").bold(False).text(columns("Efectivo",pesos(summary["cash"]))).text(columns("Tarjeta",pesos(summary["card"]))).text(columns("Transferencia",pesos(summary["transfer"]))).text(columns("Total ventas",pesos(summary["total_sold"]))).line(WIDTH)
     b.bold(True).text("PROPINAS").bold(False).text(columns("Efectivo",pesos(summary["tip_cash"]))).text(columns("Tarjeta",pesos(summary["tip_card"]))).text(columns("Transferencia",pesos(summary["tip_transfer"]))).text(columns("Total propinas",pesos(summary["total_tips"]))).line(WIDTH)

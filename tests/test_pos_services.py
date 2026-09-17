@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 import pytest
@@ -34,6 +35,16 @@ def test_card_transfer_and_consecutive_folios(db):
     card=SaleService.create(db,sale_payload([(p["id"],1)],"card",None)); transfer=SaleService.create(db,sale_payload([(p["id"],2)],"transfer",None))
     assert (card.folio,transfer.folio)==("000001","000002")
     summary=CashService.summary(db); assert summary["card"]=="25.00" and summary["transfer"]=="50.00" and summary["total_sold"]=="75.00"
+def test_split_payment_is_persisted_and_separated_in_cash_summary(db):
+    product=ProductService.create(db,product_payload(price="100"));CashService.open(db,"20")
+    payload=sale_payload([(product["id"],1)],"cash","50");payload.payments=[SimpleNamespace(method="cash",amount=Decimal("50")),SimpleNamespace(method="card",amount=Decimal("20")),SimpleNamespace(method="transfer",amount=Decimal("30"))]
+    sale=SaleService.create(db,payload);detail=SaleService.get(db,sale.id);summary=CashService.summary(db)
+    assert sale.payment_method=="mixed" and [(row.method,row.amount) for row in detail.payments]==[("cash",Decimal("50.00")),("card",Decimal("20.00")),("transfer",Decimal("30.00"))]
+    assert summary["cash"]=="50.00" and summary["card"]=="20.00" and summary["transfer"]=="30.00" and summary["total_sold"]=="100.00"
+def test_split_payment_must_equal_discounted_total(db):
+    product=ProductService.create(db,product_payload(price="100"));CashService.open(db,0)
+    payload=sale_payload([(product["id"],1)],"cash","40");payload.payments=[SimpleNamespace(method="cash",amount=Decimal("40")),SimpleNamespace(method="card",amount=Decimal("40"))]
+    with pytest.raises(PosError,match="suma de los pagos"):SaleService.create(db,payload)
 def test_historical_price_and_name_are_preserved(db):
     p=ProductService.create(db,product_payload()); CashService.open(db,0); sale=SaleService.create(db,sale_payload([(p["id"],1)],"card",None))
     model=db.get(Product,p["id"]); model.name="Nuevo nombre"; model.price=Decimal("99.00"); db.commit(); historical=SaleService.get(db,sale.id)
@@ -84,6 +95,12 @@ def test_table_additions_preserve_separate_timestamps(db):
     second=DiningTableService.add_items(db,table["id"],[SimpleNamespace(product_id=product["id"],quantity=2)])
     assert len(first["items"])==1 and len(second["items"])==2
     assert all(item["added_at"] for item in second["items"]) and second["total"]=="75.00"
+def test_printed_table_is_locked_until_reopened(db):
+    product=ProductService.create(db,product_payload());table=DiningTableService.create(db,"Mesa bloqueada");DiningTableService.add_items(db,table["id"],[SimpleNamespace(product_id=product["id"],quantity=1)])
+    model=DiningTableService.get(db,table["id"]);model.account_printed_at=datetime.now();db.commit()
+    with pytest.raises(PosError,match="cuenta ya fue impresa"):DiningTableService.add_items(db,table["id"],[SimpleNamespace(product_id=product["id"],quantity=1)])
+    reopened=DiningTableService.reopen_printed(db,table["id"]);assert reopened["account_printed_at"] is None
+    saved=DiningTableService.add_items(db,table["id"],[SimpleNamespace(product_id=product["id"],quantity=1)]);assert len(saved["items"])==2
 def test_tip_is_separated_by_method_in_cash_summary(db):
     product=ProductService.create(db,product_payload());CashService.open(db,0)
     payload=sale_payload([(product["id"],1)],"card","15");payload.tip_amount=Decimal("15");payload.tip_method="cash"

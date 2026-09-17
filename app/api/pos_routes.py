@@ -19,7 +19,8 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     name:str|None=None; price:Decimal|None=Field(default=None,ge=0); category:str|None=None; active:bool|None=None
 class SaleLine(BaseModel): product_id:int; quantity:int=Field(ge=1,le=999)
-class SaleCreate(BaseModel): items:list[SaleLine]; payment_method:str; amount_received:Decimal|None=None; tip_amount:Decimal=Field(default=0,ge=0); tip_method:str|None=None;discount_amount:Decimal=Field(default=0,ge=0);discount_reason:str=""; print_ticket:bool=True; guest_count:int=Field(default=0,ge=0)
+class PaymentLine(BaseModel):method:str;amount:Decimal=Field(gt=0)
+class SaleCreate(BaseModel): items:list[SaleLine]; payment_method:str="cash";payments:list[PaymentLine]=Field(default_factory=list);amount_received:Decimal|None=None; tip_amount:Decimal=Field(default=0,ge=0); tip_method:str|None=None;discount_amount:Decimal=Field(default=0,ge=0);discount_reason:str="";discount_password:str|None=None; print_ticket:bool=True; guest_count:int=Field(default=0,ge=0)
 class CashOpen(BaseModel): opening_amount:Decimal=Field(ge=0)
 class CashClose(BaseModel):declared_cash:Decimal=Field(ge=0);declared_card:Decimal=Field(ge=0);declared_transfer:Decimal=Field(ge=0)
 class CashChargePayload(BaseModel):amount:Decimal=Field(gt=0);concept:str=Field(min_length=2,max_length=240)
@@ -28,8 +29,9 @@ class CategoryPayload(BaseModel): name:str=Field(min_length=1,max_length=100)
 class TablePayload(BaseModel): name:str=Field(min_length=1,max_length=80);guest_count:int=Field(default=0,ge=0,le=100);waiter_id:int|None=None
 class TableWaiterPayload(BaseModel): waiter_id:int;operation_password:str|None=None
 class TableItemsPayload(BaseModel): items:list[SaleLine]
-class TableCheckout(BaseModel): payment_method:str; amount_received:Decimal|None=None; tip_amount:Decimal=Field(default=0,ge=0); tip_method:str|None=None;discount_amount:Decimal=Field(default=0,ge=0);discount_reason:str=""; print_ticket:bool=True
+class TableCheckout(BaseModel): payment_method:str="cash";payments:list[PaymentLine]=Field(default_factory=list);amount_received:Decimal|None=None; tip_amount:Decimal=Field(default=0,ge=0); tip_method:str|None=None;discount_amount:Decimal=Field(default=0,ge=0);discount_reason:str="";discount_password:str|None=None; print_ticket:bool=True
 class CancelTableItem(BaseModel):quantity:int=Field(ge=1);reason:str=Field(min_length=2,max_length=240);operation_password:str|None=None
+class OperationAuthorization(BaseModel):operation:str;password:str|None=None
 class TransferLine(BaseModel):item_id:int;quantity:int=Field(ge=1)
 class TransferPayload(BaseModel):target_table_id:int;items:list[TransferLine];operation_password:str|None=None
 class BusinessUpdate(BaseModel):
@@ -92,7 +94,9 @@ def sale(sale_id:int,_:User=Depends(require_roles("admin","cashier")),db:Session
     except PosError as exc:fail(exc,404)
 @router.post("/sales",status_code=201,tags=["sales"])
 def create_sale(payload:SaleCreate,request:Request,user:User=Depends(require_roles("admin","cashier")),db:Session=Depends(get_db)):
-    try:saved=SaleService.create(db,payload)
+    try:
+        if payload.discount_amount>0:authorize_operation(db,user,"discount",payload.discount_password)
+        saved=SaleService.create(db,payload)
     except PosError as exc:fail(exc)
     record_audit(db,user,"sale.create","sale",saved.id,{"folio":saved.folio,"total":saved.total,"discount":saved.discount_amount,"discount_reason":saved.discount_reason});response={"success":True,"message":"Venta registrada correctamente","sale":sale_dict(saved,True),"print_success":None}
     if payload.print_ticket and get_permissions(db).print_on_checkout:
@@ -111,6 +115,10 @@ def reprint_sale(sale_id:int,request:Request,_:User=Depends(require_roles("admin
 
 @router.get("/tables",tags=["tables"])
 def tables(user:User=Depends(require_user),db:Session=Depends(get_db)): return DiningTableService.list(db,user)
+@router.post("/operations/authorize",tags=["permissions"])
+def authorize(payload:OperationAuthorization,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    if payload.operation not in {"cancel","product_transfer","table_transfer"}:fail(PosError("Operación no válida"))
+    authorize_operation(db,user,payload.operation,payload.password);return {"success":True}
 @router.post("/tables",status_code=201,tags=["tables"])
 def create_table(payload:TablePayload,user:User=Depends(require_user),db:Session=Depends(get_db)):
     try:
@@ -121,7 +129,7 @@ def create_table(payload:TablePayload,user:User=Depends(require_user),db:Session
 @router.put("/tables/{table_id}/waiter",tags=["tables"])
 def assign_table_waiter(table_id:int,payload:TableWaiterPayload,user:User=Depends(require_user),db:Session=Depends(get_db)):
     try:
-        DiningTableService.get(db,table_id,user);authorize_operation(db,user,"transfer",payload.operation_password)
+        DiningTableService.get(db,table_id,user);authorize_operation(db,user,"table_transfer",payload.operation_password)
         return DiningTableService.assign_waiter(db,table_id,payload.waiter_id)
     except PosError as exc:fail(exc,404 if "encontr" in str(exc) else 400)
 @router.put("/tables/{table_id}/items",tags=["tables"])
@@ -139,13 +147,22 @@ def cancel_table(table_id:int,user:User=Depends(require_roles("admin","cashier")
 @router.post("/tables/{table_id}/print-account",tags=["tables"])
 def print_table_account(table_id:int,request:Request,user:User=Depends(require_user),db:Session=Depends(get_db)):
     try:
-        if user.role=="waiter" and not get_permissions(db).waiter_print_account:fail(PosError("El perfil Mesero no tiene permiso para imprimir cuentas"),403)
+        permissions=get_permissions(db)
+        if user.role=="waiter" and not permissions.waiter_print_account:fail(PosError("El perfil Mesero no tiene permiso para imprimir cuentas"),403)
         table=DiningTableService.get(db,table_id,user)
+        if table.account_printed_at and user.role!="admin" and not (permissions.waiter_reprint_account if user.role=="waiter" else permissions.cashier_reprint_account):fail(PosError("Tu perfil no puede reimprimir cuentas"),403)
         if not table.items:raise PosError("La mesa no tiene productos")
         config=get_business_config(db)
-        return deliver_ticket(request,db,table_account_ticket(table,config,get_permissions(db)),config.encoding,"Cuenta enviada a impresión sin cerrar la mesa")
+        response=deliver_ticket(request,db,table_account_ticket(table,config,permissions),config.encoding,"Cuenta enviada a impresión sin cerrar la mesa")
+        table.account_printed_at=datetime.now();table.updated_at=datetime.now();db.commit();record_audit(db,user,"table.account_printed","dining_table",table_id);return response
     except PosError as exc:fail(exc,404)
     except (PrinterError,LookupError,ValueError) as exc:fail(exc,503)
+@router.post("/tables/{table_id}/reopen-account",tags=["tables"])
+def reopen_table_account(table_id:int,user:User=Depends(require_user),db:Session=Depends(get_db)):
+    permissions=get_permissions(db);allowed=permissions.waiter_reopen_printed_table if user.role=="waiter" else permissions.cashier_reopen_printed_table if user.role=="cashier" else True
+    if not allowed:fail(PosError("Tu perfil no puede reabrir mesas con cuenta impresa"),403)
+    try:result=DiningTableService.reopen_printed(db,table_id);record_audit(db,user,"table.account_reopened","dining_table",table_id);return result
+    except PosError as exc:fail(exc)
 @router.get("/tables/{table_id}/cancellations",tags=["tables"])
 def table_cancellations(table_id:int,user:User=Depends(require_user),db:Session=Depends(get_db)):
     try:DiningTableService.get(db,table_id,user);return DiningTableService.cancellations(db,table_id)
@@ -158,13 +175,14 @@ def cancel_table_item(table_id:int,item_id:int,payload:CancelTableItem,user:User
 @router.post("/tables/{table_id}/transfer",tags=["tables"])
 def transfer_table_items(table_id:int,payload:TransferPayload,user:User=Depends(require_user),db:Session=Depends(get_db)):
     try:
-        DiningTableService.get(db,table_id,user);authorize_operation(db,user,"transfer",payload.operation_password);result=DiningTableService.transfer_items(db,table_id,payload.target_table_id,payload.items,user);record_audit(db,user,"table.transfer","dining_table",table_id,{"target_table_id":payload.target_table_id,"items":[item.model_dump() for item in payload.items]});return result
+        DiningTableService.get(db,table_id,user);DiningTableService.get(db,payload.target_table_id,user);authorize_operation(db,user,"product_transfer",payload.operation_password);result=DiningTableService.transfer_items(db,table_id,payload.target_table_id,payload.items,user);record_audit(db,user,"table.product_transfer","dining_table",table_id,{"target_table_id":payload.target_table_id,"items":[item.model_dump() for item in payload.items]});return result
     except PosError as exc:fail(exc)
 @router.post("/tables/{table_id}/checkout",tags=["tables"])
 def checkout_table(table_id:int,payload:TableCheckout,request:Request,user:User=Depends(require_roles("admin","cashier")),db:Session=Depends(get_db)):
     try:
-        table=DiningTableService.get(db,table_id)
-        sale_payload=SaleCreate(items=[SaleLine(product_id=item.product_id,quantity=item.quantity) for item in table.items],payment_method=payload.payment_method,amount_received=payload.amount_received,tip_amount=payload.tip_amount,tip_method=payload.tip_method,discount_amount=payload.discount_amount,discount_reason=payload.discount_reason,print_ticket=payload.print_ticket,guest_count=table.guest_count or 0)
+        table=DiningTableService.ensure_editable(DiningTableService.get(db,table_id))
+        if payload.discount_amount>0:authorize_operation(db,user,"discount",payload.discount_password)
+        sale_payload=SaleCreate(items=[SaleLine(product_id=item.product_id,quantity=item.quantity) for item in table.items],payment_method=payload.payment_method,payments=payload.payments,amount_received=payload.amount_received,tip_amount=payload.tip_amount,tip_method=payload.tip_method,discount_amount=payload.discount_amount,discount_reason=payload.discount_reason,print_ticket=payload.print_ticket,guest_count=table.guest_count or 0)
         saved=SaleService.create(db,sale_payload); table=DiningTableService.get(db,table_id); table.status="closed"; table.closed_at=datetime.now(); table.updated_at=datetime.now(); db.commit()
     except PosError as exc:fail(exc)
     record_audit(db,user,"table.checkout","dining_table",table_id,{"sale_id":saved.id,"folio":saved.folio,"total":saved.total,"discount":saved.discount_amount});response={"success":True,"message":"Mesa cobrada y registrada correctamente","sale":sale_dict(saved,True),"print_success":None}

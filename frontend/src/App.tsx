@@ -15,7 +15,7 @@ import {TablesPage} from './pages/TablesPage';
 import {UsersPage} from './pages/UsersPage';
 import type {AuthStatus,BusinessConfig,Category,Permissions,Product,User,UserRole} from './types';
 
-const defaultPermissions:Permissions={cashier_table_access:true,waiter_print_account:true,waiter_transfer_mode:'allowed',cashier_transfer_mode:'allowed',waiter_cancel_mode:'allowed',cashier_cancel_mode:'allowed',include_tip_in_ticket:true,service_charge_percent:10,include_suggested_tip:false,suggested_tip_percent:10,print_on_checkout:true,waiter_require_guest_count:false,developer_mode:false};
+const defaultPermissions:Permissions={cashier_table_access:true,waiter_print_account:true,waiter_product_transfer_mode:'allowed',cashier_product_transfer_mode:'allowed',waiter_table_transfer_mode:'allowed',cashier_table_transfer_mode:'allowed',waiter_cancel_mode:'allowed',cashier_cancel_mode:'allowed',cashier_discount_mode:'allowed',waiter_reopen_printed_table:false,cashier_reopen_printed_table:true,waiter_reprint_account:true,cashier_reprint_account:true,cancel_password_configured:false,product_transfer_password_configured:false,table_transfer_password_configured:false,discount_password_configured:false,include_tip_in_ticket:true,service_charge_percent:10,include_suggested_tip:false,suggested_tip_percent:10,print_on_checkout:true,waiter_require_guest_count:false,developer_mode:false};
 
 export default function App(){
  const [auth,setAuth]=useState<AuthStatus|null>(null),[permissions,setPermissions]=useState<Permissions>(defaultPermissions),[products,setProducts]=useState<Product[]>([]),[categories,setCategories]=useState<Category[]>([]),[business,setBusiness]=useState('MI NEGOCIO'),[cashOpen,setCashOpen]=useState(false),[notice,setNotice]=useState<NoticeState|null>(null),[virtualTicket,setVirtualTicket]=useState(''),[loading,setLoading]=useState(true);
@@ -31,7 +31,7 @@ export default function App(){
  async function logout(){await api.logout();setAuth({setup_required:false,authenticated:false,user:null});setProducts([]);setCategories([])}
  return <Layout business={business} cashOpen={cashOpen} user={user} permissions={permissions} onLogout={()=>void logout()}><Notice notice={notice} onClose={()=>setNotice(null)}/>{virtualTicket&&<VirtualTicketModal ticket={virtualTicket} onClose={()=>setVirtualTicket('')}/>}<Routes>
   <Route path="/" element={<Navigate to={home} replace/>}/>
-  <Route path="/pos" element={allowed(['admin','cashier'],loading?loader:<PosPage products={products} cashOpen={cashOpen} permissions={permissions} onReload={()=>void refresh()} onNotice={notify}/>)}/>
+  <Route path="/pos" element={allowed(['admin','cashier'],loading?loader:<PosPage products={products} cashOpen={cashOpen} role={user.role} permissions={permissions} onReload={()=>void refresh()} onNotice={notify}/>)}/>
   <Route path="/mesas" element={user.role==='cashier'&&!permissions.cashier_table_access?<Navigate to="/pos" replace/>:loading?loader:<TablesPage products={products} cashOpen={cashOpen} role={user.role} permissions={permissions} onReload={()=>void refresh()} onNotice={notify}/>}/>
   <Route path="/productos" element={allowed(['admin'],loading?loader:<ProductContainer categories={categories} refresh={refresh} notify={notify}/>)}/>
   <Route path="/categorias" element={<Navigate to="/productos" replace/>}/>

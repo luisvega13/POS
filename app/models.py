@@ -59,6 +59,15 @@ class Sale(Base):
     created_at: Mapped[datetime]=mapped_column(DateTime,default=now,index=True)
     cash_session: Mapped[CashSession]=relationship(back_populates="sales")
     items: Mapped[list["SaleItem"]]=relationship(back_populates="sale",cascade="all, delete-orphan",order_by="SaleItem.id")
+    payments: Mapped[list["SalePayment"]]=relationship(back_populates="sale",cascade="all, delete-orphan",order_by="SalePayment.id")
+
+class SalePayment(Base):
+    __tablename__="sale_payments"
+    id: Mapped[int]=mapped_column(primary_key=True)
+    sale_id: Mapped[int]=mapped_column(ForeignKey("sales.id"),index=True)
+    method: Mapped[str]=mapped_column(String(20),index=True)
+    amount: Mapped[Decimal]=mapped_column(MONEY)
+    sale: Mapped[Sale]=relationship(back_populates="payments")
 
 class SaleItem(Base):
     __tablename__="sale_items"
@@ -79,6 +88,7 @@ class DiningTable(Base):
     opened_at: Mapped[datetime]=mapped_column(DateTime,default=now,index=True)
     updated_at: Mapped[datetime]=mapped_column(DateTime,default=now,onupdate=now)
     closed_at: Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    account_printed_at: Mapped[datetime|None]=mapped_column(DateTime,nullable=True,index=True)
     guest_count: Mapped[int]=mapped_column(Integer,default=0)
     assigned_waiter_id: Mapped[int|None]=mapped_column(ForeignKey("users.id"),nullable=True,index=True)
     assigned_waiter_name: Mapped[str]=mapped_column(String(120),default="")
@@ -182,8 +192,22 @@ class PermissionConfig(Base):
     waiter_print_account: Mapped[bool]=mapped_column(Boolean,default=True)
     waiter_transfer_mode: Mapped[str]=mapped_column(String(20),default="allowed")
     cashier_transfer_mode: Mapped[str]=mapped_column(String(20),default="allowed")
+    waiter_product_transfer_mode: Mapped[str]=mapped_column(String(20),default="allowed")
+    cashier_product_transfer_mode: Mapped[str]=mapped_column(String(20),default="allowed")
+    waiter_table_transfer_mode: Mapped[str]=mapped_column(String(20),default="allowed")
+    cashier_table_transfer_mode: Mapped[str]=mapped_column(String(20),default="allowed")
     waiter_cancel_mode: Mapped[str]=mapped_column(String(20),default="allowed")
     cashier_cancel_mode: Mapped[str]=mapped_column(String(20),default="allowed")
+    cashier_discount_mode: Mapped[str]=mapped_column(String(20),default="allowed")
+    waiter_reopen_printed_table: Mapped[bool]=mapped_column(Boolean,default=False)
+    cashier_reopen_printed_table: Mapped[bool]=mapped_column(Boolean,default=True)
+    waiter_reprint_account: Mapped[bool]=mapped_column(Boolean,default=True)
+    cashier_reprint_account: Mapped[bool]=mapped_column(Boolean,default=True)
+    cancel_password_hash: Mapped[str]=mapped_column(String(512),default="")
+    transfer_password_hash: Mapped[str]=mapped_column(String(512),default="")
+    product_transfer_password_hash: Mapped[str]=mapped_column(String(512),default="")
+    table_transfer_password_hash: Mapped[str]=mapped_column(String(512),default="")
+    discount_password_hash: Mapped[str]=mapped_column(String(512),default="")
     include_tip_in_ticket: Mapped[bool]=mapped_column(Boolean,default=True)
     service_charge_percent: Mapped[int]=mapped_column(Integer,default=10)
     include_suggested_tip: Mapped[bool]=mapped_column(Boolean,default=False)

@@ -15,7 +15,7 @@ class SetupPayload(Credentials):display_name:str=Field(min_length=2,max_length=1
 class UserPayload(SetupPayload):role:str
 class UserUpdate(BaseModel):display_name:str|None=Field(default=None,min_length=2,max_length=120);role:str|None=None;active:bool|None=None;password:str|None=Field(default=None,min_length=8,max_length=128)
 class PermissionsPayload(BaseModel):
-    cashier_table_access:bool;waiter_print_account:bool;waiter_transfer_mode:str;cashier_transfer_mode:str;waiter_cancel_mode:str;cashier_cancel_mode:str;include_tip_in_ticket:bool;service_charge_percent:int=Field(ge=0,le=100);include_suggested_tip:bool;suggested_tip_percent:int=Field(ge=0,le=100);print_on_checkout:bool;waiter_require_guest_count:bool;developer_mode:bool
+    cashier_table_access:bool;waiter_print_account:bool;waiter_product_transfer_mode:str;cashier_product_transfer_mode:str;waiter_table_transfer_mode:str;cashier_table_transfer_mode:str;waiter_cancel_mode:str;cashier_cancel_mode:str;cashier_discount_mode:str;waiter_reopen_printed_table:bool=False;cashier_reopen_printed_table:bool=True;waiter_reprint_account:bool=True;cashier_reprint_account:bool=True;cancel_password:str|None=Field(default=None,min_length=4,max_length=128);product_transfer_password:str|None=Field(default=None,min_length=4,max_length=128);table_transfer_password:str|None=Field(default=None,min_length=4,max_length=128);discount_password:str|None=Field(default=None,min_length=4,max_length=128);include_tip_in_ticket:bool;service_charge_percent:int=Field(ge=0,le=100);include_suggested_tip:bool;suggested_tip_percent:int=Field(ge=0,le=100);print_on_checkout:bool;waiter_require_guest_count:bool;developer_mode:bool
 def fail(message,status=400):raise HTTPException(status,detail={"success":False,"message":message})
 def set_cookie(response:Response,token:str):response.set_cookie(COOKIE_NAME,token,max_age=43200,httponly=True,samesite="strict",secure=False,path="/")
 
@@ -61,9 +61,11 @@ def update_user(user_id:int,payload:UserUpdate,current:User=Depends(require_role
 def permissions(_:User=Depends(require_roles("admin","cashier","waiter")),db:Session=Depends(get_db)):return permissions_dict(get_permissions(db))
 @router.put("/permissions")
 def update_permissions(payload:PermissionsPayload,user:User=Depends(require_roles("admin")),db:Session=Depends(get_db)):
-    values=payload.model_dump();modes={values[key] for key in ("waiter_transfer_mode","cashier_transfer_mode","waiter_cancel_mode","cashier_cancel_mode")}
+    values=payload.model_dump();passwords={key:values.pop(key) for key in ("cancel_password","product_transfer_password","table_transfer_password","discount_password")};modes={values[key] for key in ("waiter_product_transfer_mode","cashier_product_transfer_mode","waiter_table_transfer_mode","cashier_table_transfer_mode","waiter_cancel_mode","cashier_cancel_mode","cashier_discount_mode")}
     if not modes.issubset({"allowed","password","denied"}):fail("Modo de permiso no válido")
     if values["include_tip_in_ticket"] and values["include_suggested_tip"]:fail("Elige cargo de servicio o propina sugerida, no ambos")
     config=get_permissions(db)
     for key,value in values.items():setattr(config,key,value)
+    for key,value in passwords.items():
+        if value:setattr(config,f"{key}_hash",hash_password(value))
     config.updated_at=datetime.now();db.commit();db.refresh(config);record_audit(db,user,"permissions.update","permission_config",1,values);return permissions_dict(config)

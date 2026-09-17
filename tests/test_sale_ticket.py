@@ -44,10 +44,10 @@ def test_repeated_products_are_grouped_on_ticket():
     assert "Pizza               3" in text and "Coca                2" in text
 
 def test_cash_ticket_uses_final_requested_structure():
-    summary={"opened_at":"2026-09-15T10:35:00","closed_at":"2026-09-15T18:10:00","opening_amount":"1000.00","operations":10,"cash":"4623.00","card":"65.00","transfer":"0.00","total_sold":"4688.00","tip_cash":"100.00","tip_card":"70.00","tip_transfer":"0.00","total_tips":"170.00","paid_tips":"70.00","guests":2,"cancelled_accounts":0,"discounted_accounts":2,"total_discounts":"125.00","average_consumption":"468.80","charges":"60.00","grand_total":"4858.00","total_collected":"5623.00","net_total":"5493.00","declared_cash":"5493.00","declared_card":"135.00","declared_transfer":"0.00","cash_variance":"0.00"}
+    summary={"opened_at":"2026-09-15T10:35:00","closed_at":"2026-09-15T18:10:00","opening_amount":"1000.00","operations":10,"cash":"4623.00","card":"65.00","transfer":"0.00","total_sold":"4688.00","tip_cash":"100.00","tip_card":"70.00","tip_transfer":"0.00","total_tips":"170.00","paid_tips":"70.00","guests":2,"cancelled_accounts":0,"discounted_accounts":2,"total_discounts":"125.00","average_consumption":"468.80","charges":"60.00","grand_total":"4858.00","total_collected":"5623.00","net_total":"5493.00","declared_cash":"5493.00","declared_card":"135.00","declared_transfer":"0.00","cash_variance":"0.00","reopened_count":2,"last_reopened_at":"2026-09-15T17:45:00"}
     config=SimpleNamespace(encoding="cp850",character_table=None,business_name="MI NEGOCIO")
     text=cash_ticket(summary,config).decode("cp850",errors="ignore")
-    expected=("Cierre: 2026-09-15 18:10","Total ventas", "$4,688.00","Cuentas con descuento","Total descontado", "$125.00","Efectivo total","$5,623.00","Propinas pagadas","$70.00","Total                  $5,493.00","DECLARACION DEL CAJERO","Sobrante o faltante")
+    expected=("Cierre: 2026-09-15 18:10","Ultima reapertura: 2026-09-15 17:45","Reaperturas: 2","Total ventas", "$4,688.00","Cuentas con descuento","Total descontado", "$125.00","Efectivo total","$5,623.00","Propinas pagadas","$70.00","Total                  $5,493.00","DECLARACION DEL CAJERO","Sobrante o faltante")
     assert all(value in text for value in expected)
     assert text.index("Efectivo total")<text.index("DECLARACION DEL CAJERO")<text.index("Sobrante o faltante")
     assert "Gerente" not in text and "Cajero" not in text

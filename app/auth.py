@@ -27,7 +27,7 @@ def get_permissions(db:Session):
     config=db.get(PermissionConfig,1)
     if not config:config=PermissionConfig(id=1);db.add(config);db.commit();db.refresh(config)
     return config
-def permissions_dict(config:PermissionConfig):return {"cashier_table_access":config.cashier_table_access,"waiter_print_account":config.waiter_print_account,"waiter_transfer_mode":config.waiter_transfer_mode,"cashier_transfer_mode":config.cashier_transfer_mode,"waiter_cancel_mode":config.waiter_cancel_mode,"cashier_cancel_mode":config.cashier_cancel_mode,"include_tip_in_ticket":config.include_tip_in_ticket,"service_charge_percent":config.service_charge_percent,"include_suggested_tip":config.include_suggested_tip,"suggested_tip_percent":config.suggested_tip_percent,"print_on_checkout":config.print_on_checkout,"waiter_require_guest_count":config.waiter_require_guest_count,"developer_mode":config.developer_mode}
+def permissions_dict(config:PermissionConfig):return {"cashier_table_access":config.cashier_table_access,"waiter_print_account":config.waiter_print_account,"waiter_product_transfer_mode":config.waiter_product_transfer_mode,"cashier_product_transfer_mode":config.cashier_product_transfer_mode,"waiter_table_transfer_mode":config.waiter_table_transfer_mode,"cashier_table_transfer_mode":config.cashier_table_transfer_mode,"waiter_cancel_mode":config.waiter_cancel_mode,"cashier_cancel_mode":config.cashier_cancel_mode,"cashier_discount_mode":config.cashier_discount_mode,"waiter_reopen_printed_table":config.waiter_reopen_printed_table,"cashier_reopen_printed_table":config.cashier_reopen_printed_table,"waiter_reprint_account":config.waiter_reprint_account,"cashier_reprint_account":config.cashier_reprint_account,"cancel_password_configured":bool(config.cancel_password_hash),"product_transfer_password_configured":bool(config.product_transfer_password_hash),"table_transfer_password_configured":bool(config.table_transfer_password_hash),"discount_password_configured":bool(config.discount_password_hash),"include_tip_in_ticket":config.include_tip_in_ticket,"service_charge_percent":config.service_charge_percent,"include_suggested_tip":config.include_suggested_tip,"suggested_tip_percent":config.suggested_tip_percent,"print_on_checkout":config.print_on_checkout,"waiter_require_guest_count":config.waiter_require_guest_count,"developer_mode":config.developer_mode}
 def require_user(request:Request,user:User|None=Depends(current_user_optional),db:Session=Depends(get_db)):
     if not user:raise HTTPException(401,detail={"success":False,"message":"Inicia sesión para continuar"})
     if user.role=="cashier" and request.url.path.startswith("/api/tables") and not get_permissions(db).cashier_table_access:raise HTTPException(403,detail={"success":False,"message":"El perfil Caja no tiene acceso a Mesas"})
@@ -37,8 +37,9 @@ def authorize_operation(db:Session,user:User,operation:str,password:str|None):
     config=get_permissions(db);mode=getattr(config,f"{user.role}_{operation}_mode", "denied")
     if mode=="denied":raise HTTPException(403,detail={"success":False,"message":"Tu perfil no tiene permiso para realizar esta operación"})
     if mode=="password":
-        admins=db.scalars(select(User).where(User.role=="admin",User.active.is_(True))).all()
-        if not password or not any(verify_password(password,admin.password_hash) for admin in admins):raise HTTPException(403,detail={"success":False,"message":"Contraseña de administrador incorrecta"})
+        encoded=getattr(config,f"{operation}_password_hash","")
+        if not encoded:raise HTTPException(403,detail={"success":False,"message":f"Configura la contraseña operativa de {operation}"})
+        if not password or not verify_password(password,encoded):raise HTTPException(403,detail={"success":False,"message":"Contraseña operativa incorrecta"})
 def require_roles(*roles):
     def dependency(user:User=Depends(require_user)):
         if user.role not in roles:raise HTTPException(403,detail={"success":False,"message":"Tu perfil no tiene permiso para realizar esta acción"})
